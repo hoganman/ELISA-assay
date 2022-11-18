@@ -1,0 +1,123 @@
+---
+title: "DNase Dataset Exploration using Mixed Models"
+output: html_notebook
+---
+
+# Data Exploration
+
+The DNase dataset in R is a collection of data in the development of an assay.
+According to the R documentation,
+
+An object of class c("nfnGroupedData", "nfGroupedData", "groupedData", "data.frame") containing the following columns:
+
+Run      - an ordered factor with levels 10 < … < 3 indicating the assay run.
+conc     - a numeric vector giving the known concentration of the protein.
+density  - a numeric vector giving the measured optical density (dimensionless)
+           in the assay. Duplicate optical density measurements were obtained.
+
+
+The description for the factors `Run` is not exactly correct as the ordered
+factors includes 11
+```{r}
+unique(DNase$Run)
+```
+
+What does the data look like "raw"
+
+```{r}
+plot(DNase)
+```
+What we see is that there are duplicates in the density row. What is their structure?
+```{r}
+head(DNase, 10)
+```
+The duplicate density measurement occur in pairs of identical protein 
+concentration. Let's look at the density as a function of concentration.
+
+```{r}
+plot(
+    x=DNase$conc,
+    y=DNase$density,
+    xlab="Concentration",
+    ylab="Density"
+)
+```
+
+The trend indicates there is saturation limit, unless the true growth is
+logarithmic. For modeling purposes, let's consider logistic growth. What does a
+`tanh` model look like?
+
+```{r}
+tanh_input_seq <- seq(0, 12, length.out=50)
+plot(tanh_input_seq, 0.01 + 2.0 * tanh(0.2 * tanh_input_seq))
+```
+
+I would characterize this model as sufficient given some optimization.
+Given the density measurements are in pairs, let's split the data frame into
+training and testing sets.
+
+```{r}
+train_seq <- seq(1, nrow(DNase)-1, by=2)
+test_seq <- seq(2, nrow(DNase), by=2)
+if (nrow(DNase) %% 2 == 1){
+    train_seq <- c(train_seq, nrow(DNase))
+}
+
+DNase_train <- DNase[train_seq,]
+DNase_test <- DNase[test_seq, ]
+```
+
+Let's now try to fit a logistic model to the entire training dataset naively.
+
+$Y = \beta_1 \tanh{\left(\beta_2 X + \beta_3\right)}$
+
+where $X$ is the concentration and $Y$ is the density.
+
+```{r}
+density_model <- function(X, b1, b2, b3){
+    return(b1 * tanh(b2 * X + b3))
+}
+
+model_fit <- nls(
+    density ~ density_model(conc, b1, b2, b3),
+    data = DNase_train,
+    start = list(b1=2., b2=0.2, b3=0.01)
+)
+
+summary(model_fit)
+```
+
+```{r}
+model_predictions <- predict(
+    model_fit,
+    DNase_train$conc
+)
+plot(DNase_test$conc, DNase_test$density)
+lines(DNase_train$conc, model_predictions)
+```
+There are some sloppy bookkeeping as the first and last line points intersect,
+but that is OK as we want to get a feel for the model.
+
+What does each level fit have to tell us? Does each `Run` have a similar
+fit quality?
+
+```{r}
+plot(DNase_train$conc, DNase_train$density, col="black", xlim=range(DNase$conc), ylim=range(DNase$density))
+plot(DNase_test$conc, DNase_test$density, col="black", xlim=range(DNase$conc), ylim=range(DNase$density))
+for(run_level in unique(DNase_train$Run)){
+    train_data_for_model <- DNase_train[DNase_train$Run == run_level, ]
+    test_data_for_model <- DNase_test[DNase_test$Run == run_level, ]
+    temp_model_fit <- nls(
+        density ~ density_model(conc, b1, b2, b3),
+        data = train_data_for_model,
+        start = list(b1=2., b2=0.2, b3=0.01)
+    )
+    temp_model_predictions <- predict(
+        temp_model_fit,
+        test_data_for_model$conc
+    )
+    lines(test_data_for_model$conc, temp_model_predictions)
+}
+```
+
+# Mixed Models
