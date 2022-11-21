@@ -45,11 +45,28 @@ plot(
 
 The trend indicates there is saturation limit, unless the true growth is
 logarithmic. For modeling purposes, let's consider logistic growth. What does a
-`tanh` model look like?
+logistic model look like? For this analysis, let's use the self start model as we will want the gradient calculation also.
 
 ```{r}
-tanh_input_seq <- seq(0, 12, length.out=50)
-plot(tanh_input_seq, 0.01 + 2.0 * tanh(0.2 * tanh_input_seq))
+input_seq <- seq(0, 12, length.out=50)
+
+initial_pars <- c(
+    Asym = 2.0,
+    xmid = 2.0,
+    scal = 1.0
+)
+
+plot(
+    input_seq,
+    SSlogis(
+        input_seq,
+        Asym=initial_pars[["Asym"]],
+        xmid=initial_pars[["xmid"]],
+        scal=initial_pars[["scal"]]
+    ),
+    xlab="Concentration",
+    ylab="SSlogis ~ density"
+)
 ```
 
 I would characterize this model as sufficient given some optimization.
@@ -59,6 +76,7 @@ training and testing sets.
 ```{r}
 train_seq <- seq(1, nrow(DNase)-1, by=2)
 test_seq <- seq(2, nrow(DNase), by=2)
+
 if (nrow(DNase) %% 2 == 1){
     train_seq <- c(train_seq, nrow(DNase))
 }
@@ -67,21 +85,19 @@ DNase_train <- DNase[train_seq,]
 DNase_test <- DNase[test_seq, ]
 ```
 
-Let's now try to fit a logistic model to the entire training dataset naively.
+Let's now try to fit a logistic model `SSlogis` to the entire training dataset
+naively.
 
-$Y = \beta_1 \tanh{\left(\beta_2 X + \beta_3\right)}$
+$Y = \frac{\text{A}}{1+\exp{\left[\phi^{-1}\left(x_0-X\right)\right]}}$
 
-where $X$ is the concentration and $Y$ is the density.
+where $Y$ is the density, $A$ is the asymptotic value, $x_0$ is the inflection point, $\phi$ is the scale, and $X$ is the concentration.
 
 ```{r}
-density_model <- function(X, b1, b2, b3){
-    return(b1 * tanh(b2 * X + b3))
-}
 
 model_fit <- nls(
-    density ~ density_model(conc, b1, b2, b3),
+    density ~ SSlogis(conc, Asym, xmid, scal),
     data = DNase_train,
-    start = list(b1=2., b2=0.2, b3=0.01)
+    start = initial_pars
 )
 
 summary(model_fit)
@@ -108,9 +124,9 @@ for(run_level in unique(DNase_train$Run)){
     train_data_for_model <- DNase_train[DNase_train$Run == run_level, ]
     test_data_for_model <- DNase_test[DNase_test$Run == run_level, ]
     temp_model_fit <- nls(
-        density ~ density_model(conc, b1, b2, b3),
+        density ~ SSlogis(conc, Asym, xmid, scal),
         data = train_data_for_model,
-        start = list(b1=2., b2=0.2, b3=0.01)
+        start = initial_pars
     )
     temp_model_predictions <- predict(
         temp_model_fit,
@@ -121,3 +137,94 @@ for(run_level in unique(DNase_train$Run)){
 ```
 
 # Mixed Models
+
+Let's try to fit a nonlinear mixed model with a single random effect over the
+training set. The library that I will use is the `lme4`.
+
+```{r}
+library(lme4)
+```
+
+I will include the same non-linear model with a random additive magnitude $u$
+
+$Y = \frac{\text{A+u}}{1+\exp{\left[\phi^{-1}\left(x_0-X\right)\right]}}$
+
+which is a random effects vector where $u \sim \mathcal{N}\left(0, \Sigma\right)$
+
+```{r}
+DNase_train$Run <- as.numeric(DNase_train$Run)
+
+mixed_model <- nlmer(
+    density ~ SSlogis(conc, Asym, xmid, scal) ~ (Asym|Run),
+    data = DNase_train,
+    start = initial_pars
+)
+
+nm1a <- update(mixed_model, nAGQ = 0L)
+```
+
+```{r}
+summary(nm1a)
+```
+Let's examine the fixed-effects parameters against the test set
+```{r}
+nm1a_fexef <- fixef(nm1a)
+conc_range <- range(DNase$conc)
+plot_seq <- seq(conc_range[1], conc_range[2], length.out = 50)
+plot(DNase_test$conc, DNase_test$density)
+
+lines(
+    plot_seq,
+    SSlogis(
+        plot_seq,
+        nm1a_fexef[["Asym"]],
+        nm1a_fexef[["xmid"]],
+        nm1a_fexef[["scal"]]
+    )
+)
+```
+
+So how did the assay `Run` samples, the random effect, impact the fit?
+
+```{r}
+raef_out <- ranef(nm1a)$Run
+
+raef_df <- data.frame(
+    mean=raef_out[, "Asym"],
+    std=rep(sigma(nm1a), nrow(raef_out))
+    
+)
+raef_df
+```
+
+
+```{r}
+library(ggplot2)
+
+raef_plot <- ggplot(
+    raef_df,
+    aes(
+        x=c(1:nrow(raef_df)),
+        y=mean,
+        ymin=mean-std,
+        ymax=mean+std
+    )
+)
+    # + geom_line()
+    # + geom_point()
+    # + geom_errorbar(aes(ymin=mean-std, ymax=mean+std), width=.2,
+                 # position=position_dodge(0.05))
+
+# print(raef_plot)
+raef_plot + geom_pointrange()
+```
+
+```{r}
+colMeans(raef_df)
+```
+
+As expected, the expectation of the random effect vector $E[u] = 0$.
+
+Turns out that the standard deviation of the random effect is much larger than
+the effect itself. Essentially, we see that the `Run` random effect is minimal
+using this model.
