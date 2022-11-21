@@ -85,6 +85,28 @@ DNase_train <- DNase[train_seq,]
 DNase_test <- DNase[test_seq, ]
 ```
 
+Are the train and test sets fundamentally different?
+
+```{r}
+library(testthat)
+expect_true(nrow(DNase_train)==nrow(DNase_test))
+
+suppressWarnings(train_test_diff <- DNase_train - DNase_test)
+
+# First the col mean
+suppressWarnings(print(colMeans(train_test_diff)))
+
+# All the conc measurements match 1-to-1
+expect_true(all(train_test_diff$conc == 0))
+
+# What is the std-dev, and mean-stddev ratio?
+print(sd(train_test_diff$density))
+print(mean(train_test_diff$density) / sd(train_test_diff$density))
+```
+
+We see that the $1\sigma$ of the density measurements vary within 20% relative to the mean. That is quite large, and could point to treating the identical density
+measurements as random factors also.
+
 Let's now try to fit a logistic model `SSlogis` to the entire training dataset
 naively.
 
@@ -102,6 +124,7 @@ model_fit <- nls(
 
 summary(model_fit)
 ```
+
 
 ```{r}
 model_predictions <- predict(
@@ -227,4 +250,10 @@ As expected, the expectation of the random effect vector $E[u] = 0$.
 
 Turns out that the standard deviation of the random effect is much larger than
 the effect itself. Essentially, we see that the `Run` random effect is minimal
-using this model.
+using this model. 
+
+# Afterthoughts
+
+Another iteration of this analysis could study the identical density measurements as a significant random effect. This would entail creating a new factor like
+`fdensity` that takes on the levels c(1:2). To avoid over fitting, the training
+and testing sets would be the sub-samples of the `Run` factor.
