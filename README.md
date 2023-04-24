@@ -1,5 +1,14 @@
 # ELISA-assay
 
+## Depdendnecies
+
+Libraries: 
+ * R
+ * R Studio
+ * DataFrames
+ * Datasets
+
+## Description
 This is a exploration of the summary data obtained during development of an ELISA assay for the recombinant protein DNase in rat serum.
 Please see the included Rmd notebook for the exploratory analysis and model fitting.
 
